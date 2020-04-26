@@ -1,6 +1,5 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <netinet/in.h>
+#include <stdbool.h>
 #include "logging.h"
 #include "crypto.h"
 #include "version.h"
@@ -10,10 +9,12 @@
 
 struct ff_config
 {
-    uint16_t port;
-    struct in_addr ip_address;
-    struct ff_encryption_key encryption_key;
+    char *port;
+    char *ip_address;
+    uint16_t timestamp_fudge_factor;
+    struct ff_encryption_config encryption;
     enum ff_log_type logging_level;
+    bool ipv6_v6only;
 };
 
 enum ff_action

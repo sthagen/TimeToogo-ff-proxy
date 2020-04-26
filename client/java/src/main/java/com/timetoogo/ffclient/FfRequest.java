@@ -33,9 +33,24 @@ public class FfRequest {
         }
     }
 
+    public enum KeyDeriveMode {
+        PBKDF2((byte) 1);
+
+        private byte value;
+
+        private KeyDeriveMode(byte value) {
+            this.value = value;
+        }
+
+        public byte getValue() {
+            return value;
+        }
+    }
+
     private Version version;
     private long requestId;
     private List<FfRequestOption> options = new ArrayList<FfRequestOption>();
+    private List<FfRequestOption> secureOptions = new ArrayList<FfRequestOption>();
     private byte[] payload;
 
     public Version getVersion() {
@@ -56,6 +71,10 @@ public class FfRequest {
 
     public List<FfRequestOption> getOptions() {
         return options;
+    }
+
+    public List<FfRequestOption> getSecureOptions() {
+        return secureOptions;
     }
 
     public void setOptions(List<FfRequestOption> options) {

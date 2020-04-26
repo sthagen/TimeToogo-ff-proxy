@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -21,7 +22,9 @@ void ff_http_send_request(struct ff_request *request)
 {
     bool https = false;
 
-    for (int i = 0; i < request->options_length; i++)
+    // Read options backwards to ensure the encrypted options take precedence
+    uint8_t i = request->options_length;
+    while (i-- > 0)
     {
         switch (request->options[i]->type)
         {
@@ -80,10 +83,11 @@ cleanup:
 bool ff_http_send_request_unencrypted(struct ff_request *request, char *host_name)
 {
     bool ret;
-    struct hostent *host_entry = NULL;
-    struct sockaddr_in host_address;
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
     char formatted_address[INET6_ADDRSTRLEN] = {0};
     struct timeval timeout = {.tv_sec = FF_HTTP_RESPONSE_MAX_WAIT_SECS, .tv_usec = 0};
+    int err;
     int sockfd = 0;
     ssize_t chunk = 0;
     uint32_t sent = 0;
@@ -95,8 +99,20 @@ bool ff_http_send_request_unencrypted(struct ff_request *request, char *host_nam
         goto error;
     }
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    ff_log(FF_DEBUG, "Performing DNS lookup of %s", host_name);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    err = getaddrinfo(host_name, "80", &hints, &res);
+    if (err)
+    {
+        ff_log(FF_WARNING, "Failed to perform DNS lookup for host: %s", host_name);
+        goto error;
+    }
 
+    // TODO: filter out private IP ranges
+
+    sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sockfd < 0)
     {
         ff_log(FF_ERROR, "Failed to open socket");
@@ -105,26 +121,19 @@ bool ff_http_send_request_unencrypted(struct ff_request *request, char *host_nam
 
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (void *)&timeout, sizeof(timeout));
 
-    ff_log(FF_DEBUG, "Performing DNS lookup of %s", host_name);
-    host_entry = gethostbyname(host_name);
-
-    if (host_entry == NULL)
+    if (res->ai_family == AF_INET)
     {
-        ff_log(FF_WARNING, "Failed to perform DNS lookup for host: %s", host_name);
-        goto error;
+        inet_ntop(AF_INET, &((struct sockaddr_in *)res->ai_addr)->sin_addr, formatted_address, INET_ADDRSTRLEN);
+    }
+    else
+    {
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr, formatted_address, INET6_ADDRSTRLEN);
     }
 
-    memset(&host_address, 0, sizeof(host_address));
-    host_address.sin_family = AF_INET;
-    host_address.sin_port = htons(80);
-    memcpy(&host_address.sin_addr.s_addr, host_entry->h_addr_list[0], host_entry->h_length);
-
-    // TODO: filter out private IP ranges
-
-    inet_ntop(AF_INET, &host_address.sin_addr, formatted_address, INET_ADDRSTRLEN);
     ff_log(FF_DEBUG, "Resolved host %s to ip address %s", host_name, formatted_address);
 
-    if (connect(sockfd, (struct sockaddr *)&host_address, sizeof(host_address)))
+    err = connect(sockfd, res->ai_addr, res->ai_addrlen);
+    if (err)
     {
         ff_log(FF_WARNING, "Failed to connect to host: %s", host_name);
         goto error;
@@ -187,6 +196,11 @@ done:
     goto cleanup;
 
 cleanup:
+    if (res != NULL)
+    {
+        freeaddrinfo(res);
+    }
+
     if (sockfd != 0)
     {
         close(sockfd);
@@ -201,7 +215,6 @@ bool ff_http_send_request_tls(struct ff_request *request, char *host_name)
     long res = 1;
 
     SSL_CTX *ctx = NULL;
-    X509_VERIFY_PARAM *param = NULL;
     BIO *web = NULL;
     SSL *ssl = NULL;
     char error_string[256] = {0};
@@ -265,13 +278,18 @@ bool ff_http_send_request_tls(struct ff_request *request, char *host_name)
         goto error;
     }
 
-    param = SSL_get0_param(ssl);
-    res = X509_VERIFY_PARAM_set1_host(param, host_name, strlen(host_name));
-    if (res != 1)
+#ifndef OPENSSL_SKIP_HOST_VALIDATION
     {
-        ff_log(FF_ERROR, "Failed to set OpenSSL param host name");
-        goto error;
+        X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+
+        res = X509_VERIFY_PARAM_set1_host(param, host_name, strlen(host_name));
+        if (res != 1)
+        {
+            ff_log(FF_ERROR, "Failed to set OpenSSL param host name");
+            goto error;
+        }
     }
+#endif
 
     SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL);
 
@@ -360,7 +378,7 @@ cleanup:
 char *ff_http_get_destination_host(struct ff_request *request)
 {
     // @see https://stackoverflow.com/questions/8724954/what-is-the-maximum-number-of-characters-for-a-host-name-in-unix
-    char *host_name = (char *)malloc(_POSIX_HOST_NAME_MAX + 1);
+    char *host_name = malloc(_POSIX_HOST_NAME_MAX + 1);
     char *http_request = (char *)request->payload->value;
     char *line = http_request;
     uint64_t payload_len = request->payload_length;

@@ -3,7 +3,7 @@
 # make test		# run tests
 # make clean	# remove all binaries and objects
 
-.PHONY: build build_server build_client test test_build
+.PHONY: build_check build build_server build_client test test_build
 
 LD=gcc
 CC=gcc
@@ -14,10 +14,37 @@ else
 OPTIMISE_FLAGS=
 endif
 
-CC_FLAGS=-Wall -Wextra $(OPTIMISE_FLAGS)
-LD_FLAGS=-Wall -Wextra $(OPTIMISE_FLAGS)
-SERVER_LIBS=-lssl -lcrypto -lpthread
+CC_FLAGS=-Wall -Wextra -std=c99 -D_GNU_SOURCE $(OPTIMISE_FLAGS) $(CCFLAGS)
+LD_FLAGS=$(LDFLAGS)
+SERVER_LIBS=-lm -lssl -lcrypto -lpthread
 CLIENT_LIBS=-lssl -lcrypto
+
+ifeq ($(OPENSSL_SKIP_HOST_VALIDATION), 1)
+        CC_FLAGS += -DOPENSSL_SKIP_HOST_VALIDATION
+        OPENSSL_VER_OK = 1
+else
+        OPENSSL_VER	:= $(shell openssl version -v | cut -d " " -f 2)
+        OPENSSL_MAJOR	:= $(shell echo $(OPENSSL_VER) | cut -d . -f 1)
+        OPENSSL_MINOR	:= $(shell echo $(OPENSSL_VER) | cut -d . -f 2)
+        OPENSSL_FIX	:= $(shell echo $(OPENSSL_VER) | cut -d . -f 3)
+        OPENSSL_VER_OK	:= $(shell test $(OPENSSL_MAJOR) -ge 1 && test $(OPENSSL_MINOR) -ge 1 -o $(OPENSSL_FIX) \> 1z && echo 1)
+endif
+
+build_check:
+# OpenSSL < 1.0.2 doesn't have direct support for hostname validation
+ifneq "$(OPENSSL_VER_OK)" "1"
+	@echo "***"
+	@echo "*** OpenSSL too old (< 1.0.2)"
+	@echo "***"
+	@echo "*** If you are OK with skipping hostname validation then \
+	please build with"
+	@echo "***"
+	@echo "*** make OPENSSL_SKIP_HOST_VALIDATION=1"
+	@echo "***"
+	@false
+else
+	$(MAKE) build
+endif
 
 build: build_server build_client
 
@@ -82,15 +109,23 @@ client/crypto.o: client/c/crypto.c
 # Tests
 
 test_build: build
-	$(LD) $(LD_FLAGS) -o build/tests $(filter-out build/obj/main.o, $(wildcard build/obj/*.o)) \
+	$(CC) $(CC_FLAGS) $(LD_FLAGS) -o build/tests $(filter-out build/obj/main.o, $(wildcard build/obj/*.o)) \
 									 $(filter-out build/obj/client/main.o, $(wildcard build/obj/client/*.o)) \
 									 tests/include/*.c tests/run.c $(SERVER_LIBS)
 
 test: test_build
 	build/tests
 
+
+fuzz: build
+	clang -g -fsanitize=fuzzer,address \
+		$(CC_FLAGS) $(LD_FLAGS) -o build/fuzzer $(filter-out build/obj/main.o, $(wildcard build/obj/*.o)) \
+		$(filter-out build/obj/client/main.o, $(wildcard build/obj/client/*.o)) \
+		tests/fuzzing/fuzzer.c $(SERVER_LIBS)
+	build/fuzzer tests/fuzzing/corpus -artifact_prefix=tests/fuzzing/crashes/
+
 valgrind: test_build
-	valgrind --tool=memcheck --leak-check=full  --num-callers=100 build/tests
+	valgrind --tool=memcheck --leak-check=full  --num-callers=100 --error-exitcode=1 build/tests
 
 clean:
 	rm -f build/obj/*.o

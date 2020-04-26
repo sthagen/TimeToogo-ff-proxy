@@ -20,8 +20,8 @@ void test_client_send_request_no_packets()
 
     struct ff_client_config config =
         {
-            .ip_address = {.s_addr = ntohl(INADDR_LOOPBACK)},
-            .port = 8088,
+            .ip_address = "127.0.0.1",
+            .port = "8088",
         };
 
     uint8_t res = ff_client_send_request(&config, packets, sizeof(packets) / sizeof(packets[0]));
@@ -41,13 +41,28 @@ void test_client_send_request_two_packets()
 
     struct ff_client_config config =
         {
-            .ip_address = {.s_addr = ntohl(INADDR_LOOPBACK)},
-            .port = 8088,
+            .ip_address = "127.0.0.1",
+            .port = "8088",
         };
 
     uint8_t res = ff_client_send_request(&config, packets, sizeof(packets) / sizeof(packets[0]));
 
     TEST_ASSERT_EQUAL_MESSAGE(0, res, "return value check failed");
+}
+
+void test_client_create_payload_options()
+{
+    struct ff_client_config config = {.https = true};
+
+    struct ff_request *request = ff_request_alloc();
+
+    uint8_t result = ff_client_create_payload_options(request, &config);
+
+    TEST_ASSERT_EQUAL_MESSAGE(3, result, "return value check failed");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(NULL, request->payload, "payload check failed");
+    TEST_ASSERT_EQUAL_MESSAGE(FF_REQUEST_OPTION_TYPE_HTTPS, request->payload->value[0], "option (1) type failed");
+
+    ff_request_free(request);
 }
 
 void test_client_read_payload_from_file()
@@ -242,9 +257,10 @@ void test_client_make_request_http_and_encrypted()
 
     struct ff_client_config *config = malloc(sizeof(struct ff_client_config));
     config->https = true;
-    config->encryption_key.key = (uint8_t *)"test key";
-    config->ip_address.s_addr = ntohl(INADDR_LOOPBACK);
-    config->port = 12345;
+    config->encryption.key = (uint8_t *)"test key";
+    config->encryption.pbkdf2_iterations = 1000;
+    config->ip_address = "127.0.0.1";
+    config->port = "12345";
     config->logging_level = FF_DEBUG;
 
     int res = ff_client_make_request(config, fd);

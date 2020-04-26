@@ -9,7 +9,7 @@
 
 struct ff_request_option_node *ff_request_option_node_alloc()
 {
-    struct ff_request_option_node *option = (struct ff_request_option_node *)malloc(sizeof(struct ff_request_option_node));
+    struct ff_request_option_node *option = malloc(sizeof(struct ff_request_option_node));
 
     option->type = 0;
     option->length = 0;
@@ -20,7 +20,7 @@ struct ff_request_option_node *ff_request_option_node_alloc()
 
 void ff_request_option_load_buff(struct ff_request_option_node *node, uint32_t buff_size, void *buff)
 {
-    void *buff_copy = (char *)malloc(buff_size * sizeof(buff));
+    void *buff_copy = malloc(buff_size * sizeof(buff));
 
     memcpy(buff_copy, buff, buff_size);
 
@@ -39,7 +39,7 @@ void ff_request_option_node_free(struct ff_request_option_node *option)
 
 struct ff_request_payload_node *ff_request_payload_node_alloc()
 {
-    struct ff_request_payload_node *node = (struct ff_request_payload_node *)malloc(sizeof(struct ff_request_payload_node));
+    struct ff_request_payload_node *node = malloc(sizeof(struct ff_request_payload_node));
 
     node->length = 0;
     node->offset = 0;
@@ -51,7 +51,7 @@ struct ff_request_payload_node *ff_request_payload_node_alloc()
 
 void ff_request_payload_load_buff(struct ff_request_payload_node *node, uint32_t buff_size, void *buff)
 {
-    void *buff_copy = (char *)malloc(buff_size * sizeof(buff));
+    void *buff_copy = malloc(buff_size * sizeof(buff));
 
     memcpy(buff_copy, buff, buff_size);
 
@@ -70,7 +70,7 @@ void ff_request_payload_node_free(struct ff_request_payload_node *node)
 
 struct ff_request *ff_request_alloc()
 {
-    struct ff_request *request = (struct ff_request *)calloc(1, sizeof(struct ff_request));
+    struct ff_request *request = calloc(1, sizeof(struct ff_request));
 
     request->state = FF_REQUEST_STATE_RECEIVING;
 
@@ -100,4 +100,32 @@ void ff_request_free(struct ff_request *request)
     }
 
     FREE(request);
+}
+
+void ff_request_vectorise_payload(struct ff_request *request)
+{
+    if (request->payload->next == NULL)
+    {
+        return;
+    }
+
+    struct ff_request_payload_node *payload = ff_request_payload_node_alloc();
+    payload->length = request->payload_length;
+    payload->offset = 0;
+    payload->next = NULL;
+    payload->value = malloc(request->payload_length * sizeof(uint8_t));
+
+    struct ff_request_payload_node *node = request->payload;
+    struct ff_request_payload_node *tmp_node = NULL;
+
+    do
+    {
+        memcpy(payload->value + node->offset, node->value, node->length * sizeof(uint8_t));
+
+        tmp_node = node->next;
+        ff_request_payload_node_free(node);
+        node = tmp_node;
+    } while (node != NULL);
+
+    request->payload = payload;
 }

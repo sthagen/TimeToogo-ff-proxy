@@ -2,7 +2,8 @@ import { FfClient } from "../src/client";
 import {
   FfRequestVersion,
   FfRequestOptionType,
-  FfEncryptionMode
+  FfEncryptionMode,
+  FfKeyDeriveMode,
 } from "../src/request";
 
 describe("FfClient", () => {
@@ -10,15 +11,17 @@ describe("FfClient", () => {
     const client = new FfClient({
       ipAddress: "mock",
       port: 0,
-      preSharedKey: "testkey"
+      preSharedKey: "testkey",
     });
 
     const request = "GET / HTTP/1.1\nHost: google.com\n\n";
 
     const packets = await client._createRequestPackets({
       https: true,
-      request
+      request,
     });
+
+    const payloadOptionsLength = 11 + 4 + 3; // Timestamp option + HTTPS option + EOL option
 
     expect(packets).toHaveLength(1);
 
@@ -27,8 +30,10 @@ describe("FfClient", () => {
       4 /* Encryption Mode Option */ +
       19 /* Encryption IV Option */ +
       15 /* Encryption Tag Option */ +
-      4 /* HTTPS Option */ +
-      3 /* EOL Option */ +
+      4 /* Key Derive Mode Option */ +
+      19 /* Key Derive Salt Option */ +
+      3 /* Break Option */ +
+      payloadOptionsLength +
         request.length
     );
 
@@ -47,7 +52,7 @@ describe("FfClient", () => {
         (packets[0].payload[ptr++] << 16) +
         (packets[0].payload[ptr++] << 8) +
         (packets[0].payload[ptr++] << 0)
-    ).toEqual(request.length);
+    ).toEqual(request.length + payloadOptionsLength);
 
     // Chunk Offset (int32)
     expect(
@@ -60,16 +65,7 @@ describe("FfClient", () => {
     // Chunk Length (int16)
     expect(
       (packets[0].payload[ptr++] << 8) + (packets[0].payload[ptr++] << 0)
-    ).toEqual(request.length);
-
-    // HTTPS Option
-    expect(packets[0].payload[ptr++]).toEqual(FfRequestOptionType.HTTPS);
-    // Option length (int16)
-    expect(
-      (packets[0].payload[ptr++] << 8) + (packets[0].payload[ptr++] << 0)
-    ).toEqual(1);
-    // Option payload
-    expect(packets[0].payload[ptr++]).toEqual(1);
+    ).toEqual(request.length + payloadOptionsLength);
 
     // Encryption Mode Option
     expect(packets[0].payload[ptr++]).toEqual(
@@ -110,14 +106,39 @@ describe("FfClient", () => {
     );
     ptr += 16;
 
-    // EOL Option
-    expect(packets[0].payload[ptr++]).toEqual(FfRequestOptionType.EOL);
+    // Key Derive Mode Option
+    expect(packets[0].payload[ptr++]).toEqual(
+      FfRequestOptionType.KEY_DERIVE_MODE
+    );
+    // Option length (int16)
+    expect(
+      (packets[0].payload[ptr++] << 8) + (packets[0].payload[ptr++] << 0)
+    ).toEqual(1);
+    // Option payload
+    expect(packets[0].payload[ptr++]).toEqual(FfKeyDeriveMode.PBKDF2);
+
+    // Key Derive Salt Option
+    expect(packets[0].payload[ptr++]).toEqual(
+      FfRequestOptionType.KEY_DERIVE_SALT
+    );
+    // Option length (int16)
+    expect(
+      (packets[0].payload[ptr++] << 8) + (packets[0].payload[ptr++] << 0)
+    ).toEqual(16);
+    // Option payload
+    expect(packets[0].payload.slice(ptr, ptr + 16)).not.toEqual(
+      new Uint8Array(16)
+    );
+    ptr += 16;
+
+    // Break Option
+    expect(packets[0].payload[ptr++]).toEqual(FfRequestOptionType.BREAK);
     // Option length (int16)
     expect(
       (packets[0].payload[ptr++] << 8) + (packets[0].payload[ptr++] << 0)
     ).toEqual(0);
 
-    expect(packets[0].payload.slice(ptr)).not.toEqual(
+    expect(packets[0].payload.slice(ptr + payloadOptionsLength)).not.toEqual(
       Uint8Array.from(Buffer.from(request, "utf-8"))
     );
   });
